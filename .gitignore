@@ -2,3 +2,5 @@
 lex
 *.hi
 *.o
+*.l
+*.csv
