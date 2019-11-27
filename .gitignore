@@ -1,8 +1,10 @@
 .DS_Store
 lex
 scan
+parse
 *.hi
 *.o
 *.l
+*.y
 *.csv
 *.txt
