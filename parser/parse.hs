@@ -1,7 +1,7 @@
 import CFG
 import Input_Parser
 import DFA
-import Parsing_Table
+-- import Parsing_Table
 
 import System.IO
 import System.Environment
@@ -15,4 +15,4 @@ main = do
             contents <- readFile file_path
             let grammar = build_grammar contents
                 dfa = grammar_to_DFA grammar
-            print dfa
+            print $ collections dfa
