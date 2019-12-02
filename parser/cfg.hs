@@ -9,11 +9,13 @@ module CFG
 , start_symbol
 , productions
 , first
+, is_nullable
 , singleton_grammar
 , update_symbols
 , get_nonterminals
+, get_terminals
 , update_productions
-, is_nullable
+, update_nullable
 , update_first
 ) where
 
@@ -35,6 +37,7 @@ to_terminal_symbols strs = List.foldl (\symbols str -> Set.insert (Terminal str)
 to_nonterminal_symbols :: [String] -> Set.Set Symbol
 to_nonterminal_symbols strs = List.foldl (\symbols str -> Set.insert (Nonterminal str) symbols) Set.empty strs
 
+-- @brief if the input is `Terminal` or `Epsilon` or `EOF`, the output is True, else is Flase
 is_terminal :: Symbol -> Bool
 is_terminal (Nonterminal _) = False
 is_terminal _ = True
@@ -45,18 +48,27 @@ data Grammar = Grammar { symbols :: Set.Set Symbol
                        , start_symbol :: Symbol
                        , productions :: Symbol -> Set.Set RHS
                        , first :: [Symbol] -> Set.Set Symbol
+                       , is_nullable :: [Symbol] -> Bool
                        }
 
+-- singleton_grammar start_symbol
+-- @brief use the given start_symbol as start_symbol to generate a grammar
 singleton_grammar :: Symbol -> Grammar
 singleton_grammar start_symbol' = Grammar { symbols = Set.empty
                                           , start_symbol = start_symbol'
                                           , productions = (\_ -> Set.empty)
                                           , first = (\_ -> Set.empty)
+                                          , is_nullable = (\symbols -> case symbols of
+                                            [] -> True
+                                            [Epsilon] -> True
+                                            _ -> False)
                                           }
 
 update_symbols :: Grammar -> Set.Set Symbol -> Set.Set Symbol -> Grammar
 update_symbols grammar terminals nonterminals = grammar { symbols = Set.union terminals nonterminals }
 
+-- get_symbol grammar str
+-- @brief if there is a symbol in ths given grammar whose content is str, then return Just the symbol, else return Nothing
 get_symbol :: Grammar -> String -> Maybe Symbol
 get_symbol grammar str =
     if str == "ε"
@@ -74,6 +86,11 @@ get_nonterminals grammar = Set.filter (\symbol -> case symbol of
                                             Nonterminal _ -> True
                                             _ -> False) $ symbols grammar
 
+get_terminals :: Grammar -> Set.Set Symbol
+get_terminals grammar = Set.filter (\symbol -> case symbol of
+                                        Terminal _ -> True
+                                        _ -> False) $ symbols grammar
+
 update_productions :: Grammar -> String -> [String] -> Grammar
 update_productions grammar lhs_str rhs_strs = grammar { productions = productions' }
     where
@@ -89,16 +106,38 @@ update_productions grammar lhs_str rhs_strs = grammar { productions = production
                                     then Set.insert rhs' $ productions grammar symbol
                                     else productions grammar symbol)
 
-is_nullable :: Grammar -> [Symbol] -> Bool
-is_nullable grammar [] = True
-is_nullable grammar [symbol] = Set.member [Epsilon] $ productions grammar symbol
-is_nullable grammar (s:remain) = is_nullable grammar [s] && is_nullable grammar remain
+update_nullable :: Grammar -> Grammar
+update_nullable grammar = grammar { is_nullable = is_nullable' }
+    where
+        is_nullable' = update_nullable' grammar (is_nullable grammar)
+
+update_nullable' :: Grammar -> ([Symbol] -> Bool) -> [Symbol] -> Bool
+update_nullable' grammar is_nullable = is_nullable'
+    where
+        is_nullable1 = Set.foldl (\is_nullable'' symbol -> update_nullable_with_non_terminal grammar symbol is_nullable'') is_nullable $ get_nonterminals grammar
+        is_nullable_stable = compare_nullable (symbols grammar) is_nullable is_nullable1
+            where
+                compare_nullable symbols nullable1 nullable2 =
+                    if Set.null symbols
+                        then True
+                        else if nullable1 [Set.elemAt 0 symbols] == nullable2 [Set.elemAt 0 symbols]
+                            then compare_nullable (Set.deleteAt 0 symbols) nullable1 nullable2
+                            else False
+        is_nullable' = if is_nullable_stable then is_nullable1 else update_nullable' grammar is_nullable1
+
+update_nullable_with_non_terminal :: Grammar -> Symbol -> ([Symbol] -> Bool) -> [Symbol] -> Bool
+update_nullable_with_non_terminal grammar symbol is_nullable = 
+    \symbols -> case symbols of
+        [symbol'] -> if symbol' == symbol
+            then not $ Set.null $ Set.filter (\production -> is_nullable production) $ productions grammar symbol
+            else is_nullable symbols
+        (s:ss) -> is_nullable [s] && is_nullable ss
 
 update_first :: Grammar -> Grammar
 update_first grammar = grammar { first = first' }
     where
         first1 = update_first_with_terminals $ first grammar
-        first' = update_others grammar first1
+        first2 = update_others grammar first1
             where
                 update_others grammar first1 = first'
                     where
@@ -114,6 +153,7 @@ update_first grammar = grammar { first = first' }
                                             then compare_first (Set.deleteAt 0 symbols) first1 first2
                                             else False
                         first' = if is_first_stable then first2 else update_others grammar first2
+        first' = update_first_with_list grammar first2
 
 update_first_with_terminals :: ([Symbol] -> Set.Set Symbol) -> [Symbol] -> Set.Set Symbol
 update_first_with_terminals first = 
@@ -126,14 +166,21 @@ update_first_with_terminals first =
 update_first_with_nonterminal :: Grammar -> Symbol -> ([Symbol] -> Set.Set Symbol) -> [Symbol] -> Set.Set Symbol
 update_first_with_nonterminal grammar symbol first = 
     \symbols -> case symbols of
-                    [symbol] -> Set.foldl (\symbols' rhs -> 
-                        Set.union symbols' $ update_first_with_production grammar rhs first) Set.empty $ productions grammar symbol
+                    [symbol'] -> if symbol' == symbol
+                                    then Set.foldl (\symbols' rhs -> 
+                                            Set.union symbols' $ update_first_with_production grammar rhs first) Set.empty $ productions grammar symbol
+                                    else first [symbol']
                     _ -> first symbols
 
 update_first_with_production :: Grammar-> RHS -> ([Symbol] -> Set.Set Symbol) -> Set.Set Symbol
 update_first_with_production _ [s] first = first [s]
-update_first_with_production grammar (s:ss) first = 
-    Set.union (Set.delete Epsilon $ first [s]) (if is_nullable grammar [head ss]
-                            then update_first_with_production grammar ss first
-                            else Set.empty)
+update_first_with_production grammar (s:ss) first = if is_nullable grammar [s]
+    then Set.union (Set.delete Epsilon $ first [s]) (update_first_with_production grammar ss first)
+    else first [s]
                                     
+update_first_with_list :: Grammar -> ([Symbol] -> Set.Set Symbol) -> [Symbol] -> Set.Set Symbol
+update_first_with_list grammar first = first'
+    where
+        first' = \symbols -> case symbols of
+                    [] -> Set.empty
+                    _ -> update_first_with_production grammar symbols first
